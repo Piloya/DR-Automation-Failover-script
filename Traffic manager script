@@ -1,0 +1,55 @@
+param (
+    [object]$WebhookData
+)
+
+# Authenticate using Managed Identity
+try {
+    Connect-AzAccount -Identity | Out-Null
+}
+catch {
+    Write-Error "Authentication failed using Managed Identity. $_"
+    exit
+}
+
+# Define variables
+$resourceGroup = "DR-RG"
+$profileName = "demofsql-trafficmgr"
+$primaryEndpointName = "Primary-demofsql"
+$recoveryEndpointName = "Secondary-demofsql"
+$endpointType = "AzureEndpoints"  # This is usually 'AzureEndpoints' for Azure-based endpoints
+
+try {
+    # Get and disable the primary endpoint
+    $primaryEndpoint = Get-AzTrafficManagerEndpoint `
+        -Name $primaryEndpointName `
+        -ProfileName $profileName `
+        -ResourceGroupName $resourceGroup `
+        -Type $endpointType
+
+    if ($null -eq $primaryEndpoint) {
+        throw "Primary endpoint '$primaryEndpointName' not found."
+    }
+
+    $primaryEndpoint.EndpointStatus = "Disabled"
+    Set-AzTrafficManagerEndpoint -TrafficManagerEndpoint $primaryEndpoint
+    Write-Output "Primary endpoint '$primaryEndpointName' disabled."
+
+    # Get and enable the recovery endpoint
+    $recoveryEndpoint = Get-AzTrafficManagerEndpoint `
+        -Name $recoveryEndpointName `
+        -ProfileName $profileName `
+        -ResourceGroupName $resourceGroup `
+        -Type $endpointType
+
+    if ($null -eq $recoveryEndpoint) {
+        throw "Recovery endpoint '$recoveryEndpointName' not found."
+    }
+
+    $recoveryEndpoint.EndpointStatus = "Enabled"
+    Set-AzTrafficManagerEndpoint -TrafficManagerEndpoint $recoveryEndpoint
+    Write-Output "Recovery endpoint '$recoveryEndpointName' enabled."
+
+}
+catch {
+    Write-Error "Error updating Traffic Manager endpoints: $_"
+}
