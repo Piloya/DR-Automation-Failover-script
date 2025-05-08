@@ -1,0 +1,67 @@
+$PSVersionTable
+$resourceGroup = "DR-RG"
+
+# Define all required variables
+$VaultName = "DRVault"
+$VaultResourceGroupName = "DR-RG"
+$VaultSubscriptionId = "(subscription id)"
+$RecoveryPlanName = "FailoverPlan"
+$vmsResourceGroup = "PrimaryRG"
+$PrimaryRegion = "South Africa North"        
+$RecoveryRegion = "West US"      
+$RecoveryVnetId = "/subscriptions/(subscription id)/resourceGroups/DR-RG/providers/Microsoft.Network/virtualNetworks/DR-VNet"       #Replace (subscription id) with your subscription id 
+
+# Ensures you do not inherit an AzContext in your runbook
+Disable-AzContextAutosave -Scope Process
+
+# Connect to Azure with system-assigned managed identity
+Connect-AzAccount -Identity
+
+# Set and store context
+Set-AzContext -SubscriptionId "ab6cee4f-fe55-427f-b8b1-cdf0dca449dd"
+
+# Print the automation account properties
+Get-AzAutomationAccount -ResourceGroup $resourceGroup -Name "DRAutomation"
+
+$DeploymentScriptOutputs = @{}
+
+# Setup the vault context
+Write-Output "Setting Vault context using vault $VaultName under resource group $VaultResourceGroupName in subscription $VaultSubscriptionId"
+Select-AzSubscription -SubscriptionId $VaultSubscriptionId
+$vault = Get-AzRecoveryServicesVault -ResourceGroupName $VaultResourceGroupName -Name $VaultName
+Set-AzRecoveryServicesAsrVaultContext -Vault $vault
+
+# Get Recovery Plan details
+$RecoveryPlan = Get-AzRecoveryServicesAsrRecoveryPlan -Name $RecoveryPlanName
+$vmNames = $RecoveryPlan.Groups.ReplicationProtectedItems.FriendlyName
+Write-Output "Performing Test Failover for VMs in Recovery Plan - $($RecoveryPlan.FriendlyName) in vault $VaultName"
+
+$sourceVmIds = New-Object System.Collections.ArrayList
+foreach ($vm in $vmNames) {
+    $vmid = (Get-AzVm -ResourceGroupName $vmsResourceGroup -Name $vm).Id
+    $sourceVmIds.Add($vmid.Trim())
+}
+
+# Get containers
+$priFabric = Get-AzRecoveryServicesAsrFabric | Where-Object { $_.FabricSpecificDetails.Location -like $PrimaryRegion -or $_.FabricSpecificDetails.Location -like $PrimaryRegion.Replace(' ', '') }
+$priContainer = Get-AzRecoveryServicesAsrProtectionContainer -Fabric $priFabric
+$recFab = Get-AzRecoveryServicesAsrFabric | Where-Object { $_.FabricSpecificDetails.Location -like $RecoveryRegion -or $_.FabricSpecificDetails.Location -like $RecoveryRegion.Replace(' ', '') }
+$recContainer = Get-AzRecoveryServicesAsrProtectionContainer -Fabric $recFab
+$reverseContainerMapping = Get-AzRecoveryServicesAsrProtectionContainerMapping -ProtectionContainer $recContainer | Where-Object { $_.TargetProtectionContainerId -like $priContainer.Id }
+
+$priContainerRPIS = Get-AzRecoveryServicesAsrReplicationProtectedItem -ProtectionContainer $priContainer
+$rpisInContainer = $priContainerRPIS | Where-Object { $sourceVmIds -contains $_.ProviderSpecificDetails.FabricObjectId }
+
+Write-Output "Replication protected Items in Container:"
+$rpisInContainer
+
+# Test Failover
+$testfailoverJobs = New-Object System.Collections.ArrayList
+$rpiLookUpByJobId = @{}
+foreach ($rpi in $rpisInContainer) {
+    Write-Output "Triggering test failover for $($rpi.FriendlyName)"
+    $job = Start-AzRecoveryServicesAsrTestFailoverJob -ReplicationProtectedItem $rpi -Direction PrimaryToRecovery -AzureVMNetworkId $RecoveryVnetId
+    $testfailoverJobs.Add($job)
+    $rpiLookUpByJobId[$job.Id] = $rpi
+}
+
