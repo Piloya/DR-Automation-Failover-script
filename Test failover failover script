@@ -1,0 +1,89 @@
+param( 
+    [string] $VaultSubscriptionId = 'ab6cee4f-fe55-427f-b8b1-cdf0dca449dd',
+    [string] $VaultResourceGroupName = 'DR-RG',
+    [string] $VaultName = 'DRVault',
+    [string] $PrimaryRegion = 'South Africa North',
+    [string] $RecoveryRegion = 'West US',
+    [string] $RecoveryPlanName = 'FailoverPlan',
+    [string] $sourcevmsresourceGroup = 'PrimaryRG',
+    [string] $drvmsresourceGroup = 'DR-RG'
+)
+
+try {
+    # Connect to Azure using managed identity
+    Write-Output "Connecting to Azure using managed identity..."
+    Connect-AzAccount -Identity
+
+    # Set the context to the specified subscription
+    Write-Output "Setting Azure context for subscription: $VaultSubscriptionId"
+    Set-AzContext -SubscriptionId $VaultSubscriptionId
+
+    # Set the Recovery Services vault context
+    Write-Output "Setting Recovery Services vault context..."
+    $vault = Get-AzRecoveryServicesVault -ResourceGroupName $VaultResourceGroupName -Name $VaultName
+    if (-not $vault) { throw "Vault $VaultName not found in resource group $VaultResourceGroupName." }
+    Set-AzRecoveryServicesAsrVaultContext -Vault $vault
+
+    # Retrieve the recovery plan
+    Write-Output "Retrieving recovery plan: $RecoveryPlanName"
+    $RecoveryPlan = Get-AzRecoveryServicesAsrRecoveryPlan -Name $RecoveryPlanName
+    if (-not $RecoveryPlan) { throw "Recovery plan $RecoveryPlanName not found." }
+
+    # Define the base VM names and construct test VM names
+    $baseVmNames = @('demo3', 'demo5', 'demofsql')
+    $testVmNames = $baseVmNames | ForEach-Object { "$_-test" }
+
+    # Check if all test VMs are stopped
+    $allTestVMsStopped = $true
+    foreach ($testVm in $testVmNames) {
+        $vmStatus = Get-AzVM -ResourceGroupName $drvmsresourceGroup -Name $testVm -Status -ErrorAction SilentlyContinue
+        if ($vmStatus) {
+            $powerState = ($vmStatus.Statuses | Where-Object { $_.Code -like 'PowerState/*' }).DisplayStatus
+            Write-Output "Test VM $testVm is in state: $powerState"
+            if ($powerState -ne 'VM deallocated' -and $powerState -ne 'VM stopped') {
+                $allTestVMsStopped = $false
+                Write-Output "Test VM $testVm is not stopped. Skipping failback."
+                break
+            }
+        } else {
+            Write-Warning "Test VM $testVm not found in resource group $drvmsresourceGroup. Treating as stopped."
+        }
+    }
+
+    if (-not $allTestVMsStopped) {
+        Write-Output "Not all test VMs are stopped. No failback action taken."
+        return
+    }
+
+    # Start each VM in the primary region
+    Write-Output "Initiating failback by starting VMs in the primary region..."
+    foreach ($vmName in $baseVmNames) {
+        $vmObject = Get-AzVM -ResourceGroupName $sourcevmsresourceGroup -Name $vmName -Status -ErrorAction SilentlyContinue
+        if ($vmObject) {
+            $powerState = ($vmObject.Statuses | Where-Object { $_.Code -like 'PowerState/*' }).DisplayStatus
+            if ($powerState -eq 'VM running') {
+                Write-Output "VM $vmName is already running in $sourcevmsresourceGroup."
+            } else {
+                Write-Output "Starting VM: $vmName..."
+                $startJob = Start-AzVM -ResourceGroupName $sourcevmsresourceGroup -Name $vmName -AsJob
+                $startJob | Wait-Job
+                if ($startJob.State -eq 'Completed') {
+                    Write-Output "Successfully started VM: $vmName"
+                } else {
+                    Write-Error "Failed to start VM: $vmName"
+                }
+            }
+        } else {
+            Write-Warning "VM $vmName not found in resource group $sourcevmsresourceGroup. Skipping."
+        }
+    }
+
+    Write-Output "Test failback process completed."
+}
+catch {
+    Write-Error "An error occurred: $_"
+    throw $_
+}
+finally {
+    Write-Output "Runbook execution completed."
+}
