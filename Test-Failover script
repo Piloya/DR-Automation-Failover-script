@@ -4,12 +4,12 @@ $resourceGroup = "DR-RG"
 # Define all required variables
 $VaultName = "DRVault"
 $VaultResourceGroupName = "DR-RG"
-$VaultSubscriptionId = "(subscription id)"
+$VaultSubscriptionId = "ab6cee4f-fe55-427f-b8b1-cdf0dca449dd"
 $RecoveryPlanName = "FailoverPlan"
 $vmsResourceGroup = "PrimaryRG"
 $PrimaryRegion = "South Africa North"        
 $RecoveryRegion = "West US"      
-$RecoveryVnetId = "/subscriptions/(subscription id)/resourceGroups/DR-RG/providers/Microsoft.Network/virtualNetworks/DR-VNet"       #Replace (subscription id) with your subscription id 
+$RecoveryVnetId = "/subscriptions/ab6cee4f-fe55-427f-b8b1-cdf0dca449dd/resourceGroups/DR-RG/providers/Microsoft.Network/virtualNetworks/DR-VNet"        
 
 # Ensures you do not inherit an AzContext in your runbook
 Disable-AzContextAutosave -Scope Process
